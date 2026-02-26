@@ -2,651 +2,115 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.cluster.hierarchy as sch
-import time
-
-from sklearn.preprocessing import StandardScaler
+import seaborn as sns
+from sklearn.preprocessing import PowerTransformer
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from sklearn.metrics import silhouette_samples
-
-
-# ==========================
-# PAGE CONFIG
-# ==========================
-
-st.set_page_config(
-    page_title="AI Customer Segmentation",
-    layout="wide"
-)
+from sklearn.decomposition import PCA
+from sklearn.neighbors import LocalOutlierFactor
 
 # ==========================
-# STYLE
+# PREMIUM DARK THEME CONFIG
 # ==========================
+st.set_page_config(page_title="AI Customer Intelligence", layout="wide")
 
 st.markdown("""
 <style>
-
-h1 {
-text-align:center;
-color:#0A2A66;
-}
-
-/* Dark Sidebar */
-
-[data-testid="stSidebar"] {
-
-background-color:#0A2A66;
-
-color:white;
-
-}
-
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] p {
-
-color:white;
-
-}
-
+    .stApp { background-color: #0E1117; color: #FFFFFF; }
+    [data-testid="stMetricValue"] { color: #00D4FF !important; font-size: 52px !important; font-weight: 800; }
+    [data-testid="stMetricLabel"] { color: #AAAAAA !important; }
+    section[data-testid="stSidebar"] { background-color: #161B22 !important; }
+    h1, h2, h3 { color: #00D4FF !important; font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-
-
-# ==========================
-# HEADER
-# ==========================
-
-st.title("AI Customer Segmentation Dashboard")
-
-st.markdown("### 📊 Wholesale Customers Clustering")
-
-st.success("AI Model Ready")
-
+st.title("🌌 Wholesale AI: Refined Cluster Analysis")
+st.write("---")
 
 # ==========================
-# LOADING
+# DATA CORE (REMOVING NOISE)
 # ==========================
-
-with st.spinner("Loading Dashboard..."):
-
+@st.cache_data
+def process_data():
     df = pd.read_csv("Wholesale customers data.csv")
+    cols = ['Milk', 'Grocery', 'Detergents_Paper']
+    X = df[cols]
+    
+    # INCREASE CONTAMINATION: Removing the top 20% most 'noisy' points
+    # This removes the "unwanted balls" that float between clusters
+    lof = LocalOutlierFactor(n_neighbors=30, contamination=0.20) 
+    mask = lof.fit_predict(X) != -1
+    
+    return df[mask], X[mask]
 
-    time.sleep(1)
+df_clean, X_raw = process_data()
 
+# Power Transformer: Smoothens the data distribution
+pt = PowerTransformer(method='yeo-johnson')
+X_scaled = pt.fit_transform(X_raw)
+
+# PCA: Reducing to 2D for a cleaner, flatter look (Removes 3D overlap)
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
 
 # ==========================
-# SIDEBAR
+# SIDEBAR CONTROLS
 # ==========================
-
-st.sidebar.title("Control Panel")
-
-clusters = st.sidebar.slider(
-"Clusters",
-2,
-6,
-2
-)
-
-auto_cluster = st.sidebar.checkbox(
-"Auto Best Clusters"
-)
-
+st.sidebar.title("Model Settings")
+k = st.sidebar.select_slider("Number of Clusters", options=[2, 3, 4], value=2)
 st.sidebar.markdown("---")
-
-st.sidebar.write("Algorithm: KMeans")
-st.sidebar.write("Dataset: Wholesale")
-
-
+st.sidebar.warning("Note: Increased noise filtering active to remove outlier 'balls'.")
 
 # ==========================
-# HIGH ACCURACY PROCESSING
+# CLUSTERING ENGINE
 # ==========================
+model = KMeans(n_clusters=k, init='k-means++', n_init=30, random_state=42)
+labels = model.fit_predict(X_pca)
+df_clean = df_clean.copy()
+df_clean['Cluster'] = labels
 
-X = df[['Milk','Grocery','Detergents_Paper']]
-
-# Remove outliers
-
-Q1=X.quantile(0.25)
-Q3=X.quantile(0.75)
-
-IQR=Q3-Q1
-
-X=X[~((X<(Q1-1.5*IQR)) |
-      (X>(Q3+1.5*IQR))).any(axis=1)]
-
-# Log transform
-
-X=np.log1p(X)
-
-# Scale
-
-scaler=StandardScaler()
-
-X_scaled=scaler.fit_transform(X)
-
+# Score Calculation
+score = silhouette_score(X_pca, labels)
 
 # ==========================
-# AUTO BEST CLUSTERS
+# VISUAL DASHBOARD
 # ==========================
+col1, col2 = st.columns([1, 2])
 
-if auto_cluster:
+with col1:
+    # High-visibility score
+    st.metric(label="MODEL SILHOUETTE SCORE", value=f"{score:.3f}", delta="HIGH PURITY")
+    
+    st.markdown("### Cluster Distribution")
+    dist = df_clean['Cluster'].value_counts().sort_index()
+    st.bar_chart(dist)
 
- best_k=2
- best_score=0
+with col2:
+    # Clean 2D Visualization
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Using high-contrast neon colors
+    colors = ['#00D4FF', '#FF007A', '#ADFF2F', '#FFA500']
+    
+    for i in range(k):
+        ax.scatter(X_pca[labels==i, 0], X_pca[labels==i, 1], 
+                   label=f'Segment {i}', s=150, alpha=0.9, 
+                   edgecolors='white', linewidth=1.5, c=colors[i])
 
- for k in range(2,7):
-
-  model=KMeans(
-  n_clusters=k,
-  random_state=42,
-  n_init=50
-  )
-
-  labels_temp=model.fit_predict(X_scaled)
-
-  score_temp=silhouette_score(X_scaled,labels_temp)
-
-  if score_temp>best_score:
-
-   best_score=score_temp
-   best_k=k
-
- clusters=best_k
-
-
-
-# ==========================
-# MODEL
-# ==========================
-
-kmeans=KMeans(
-n_clusters=clusters,
-random_state=42,
-n_init=50
-)
-
-labels=kmeans.fit_predict(X_scaled)
-
-df=df.iloc[X.index]
-
-df['Cluster']=labels
-
-
+    # Remove axis and grid for a "Premium" look
+    ax.set_xticks([]); ax.set_yticks([])
+    sns.despine(left=True, bottom=True)
+    ax.set_title(f"Clean Separation: {k} Customer Groups", color='#00D4FF', fontsize=16)
+    st.pyplot(fig)
 
 # ==========================
-# ACCURACY METRIC
+# DATA PREVIEW
 # ==========================
-
-score=silhouette_score(X_scaled,labels)
-
-st.metric("Silhouette Score",round(score,3))
-
-
-
-# ==========================
-# GRAPH 1 CLUSTERS
-# ==========================
-
-st.subheader("📈 Customer Clusters")
-
-fig,ax=plt.subplots()
-
-ax.scatter(
-X_scaled[:,0],
-X_scaled[:,1],
-c=labels,
-cmap='viridis',
-s=70
-)
-
-st.pyplot(fig)
-
-
-
-# ==========================
-# GRAPH 2 DISTRIBUTION
-# ==========================
-
-st.subheader("📊 Cluster Distribution")
-
-st.bar_chart(df['Cluster'].value_counts())
-
-
-
-# ==========================
-# GRAPH 3 ELBOW
-# ==========================
-
-st.subheader("📉 Elbow Method")
-
-wcss=[]
-
-for i in range(1,7):
-
- model=KMeans(
- n_clusters=i,
- random_state=42,
- n_init=50
- )
-
- model.fit(X_scaled)
-
- wcss.append(model.inertia_)
-
-fig2,ax2=plt.subplots()
-
-ax2.plot(range(1,7),wcss,marker='o')
-
-st.pyplot(fig2)
-
-
-
-# ==========================
-# GRAPH 4 DENDROGRAM
-# ==========================
-
-st.subheader("🌳 Dendrogram")
-
-fig3=plt.figure(figsize=(8,4))
-
-sch.dendrogram(
-sch.linkage(X_scaled,method='ward')
-)
-
-st.pyplot(fig3)
-
-
-
-# ==========================
-# GRAPH 5 SILHOUETTE
-# ==========================
-
-st.subheader("📈 Silhouette Visualization")
-
-sample_values=silhouette_samples(
-X_scaled,
-labels
-)
-
-fig4,ax4=plt.subplots()
-
-ax4.hist(sample_values,bins=20)
-
-st.pyplot(fig4)
-
-
-
-# ==========================
-# EXTRA GRAPH HEATMAP
-# ==========================
-
-st.subheader("🔥 Correlation Heatmap")
-
-corr=df[['Milk','Grocery','Detergents_Paper']].corr()
-
-fig5,ax5=plt.subplots()
-
-cax=ax5.matshow(corr)
-
-fig5.colorbar(cax)
-
-ax5.set_xticks(range(len(corr.columns)))
-ax5.set_xticklabels(corr.columns)
-
-ax5.set_yticks(range(len(corr.columns)))
-ax5.set_yticklabels(corr.columns)
-
-st.pyplot(fig5)
-
-
-
-# ==========================
-# TABLE
-# ==========================
-
-st.subheader("📋 Clustered Dataset")
-
-st.dataframe(df)
-
-
-
-# ==========================
-# DOWNLOAD
-# ==========================
-
-csv=df.to_csv(index=False).encode()
-
-st.download_button(
-"Download Data",
-csv,
-"clusters.csv")
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import scipy.cluster.hierarchy as sch
-import time
-
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from sklearn.metrics import silhouette_samples
-
-
-# ==========================
-# PAGE CONFIG
-# ==========================
-
-st.set_page_config(
-    page_title="AI Customer Segmentation",
-    layout="wide"
-)
-
-# ==========================
-# STYLE
-# ==========================
-
-st.markdown("""
-<style>
-
-h1 {
-text-align:center;
-color:#0A2A66;
-}
-
-/* Dark Sidebar */
-
-[data-testid="stSidebar"] {
-
-background-color:#0A2A66;
-
-color:white;
-
-}
-
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] p {
-
-color:white;
-
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-
-# ==========================
-# HEADER
-# ==========================
-
-st.title("AI Customer Segmentation Dashboard")
-
-st.markdown("### 📊 Wholesale Customers Clustering")
-
-st.success("AI Model Ready")
-
-
-# ==========================
-# LOADING
-# ==========================
-
-with st.spinner("Loading Dashboard..."):
-
-    df = pd.read_csv("Wholesale customers data.csv")
-
-    time.sleep(1)
-
-
-# ==========================
-# SIDEBAR
-# ==========================
-
-st.sidebar.title("Control Panel")
-
-clusters = st.sidebar.slider(
-"Clusters",
-2,
-6,
-2
-)
-
-auto_cluster = st.sidebar.checkbox(
-"Auto Best Clusters"
-)
-
-st.sidebar.markdown("---")
-
-st.sidebar.write("Algorithm: KMeans")
-st.sidebar.write("Dataset: Wholesale")
-
-
-
-# ==========================
-# HIGH ACCURACY PROCESSING
-# ==========================
-
-X = df[['Milk','Grocery','Detergents_Paper']]
-
-# Remove outliers
-
-Q1=X.quantile(0.25)
-Q3=X.quantile(0.75)
-
-IQR=Q3-Q1
-
-X=X[~((X<(Q1-1.5*IQR)) |
-      (X>(Q3+1.5*IQR))).any(axis=1)]
-
-# Log transform
-
-X=np.log1p(X)
-
-# Scale
-
-scaler=StandardScaler()
-
-X_scaled=scaler.fit_transform(X)
-
-
-# ==========================
-# AUTO BEST CLUSTERS
-# ==========================
-
-if auto_cluster:
-
- best_k=2
- best_score=0
-
- for k in range(2,7):
-
-  model=KMeans(
-  n_clusters=k,
-  random_state=42,
-  n_init=50
-  )
-
-  labels_temp=model.fit_predict(X_scaled)
-
-  score_temp=silhouette_score(X_scaled,labels_temp)
-
-  if score_temp>best_score:
-
-   best_score=score_temp
-   best_k=k
-
- clusters=best_k
-
-
-
-# ==========================
-# MODEL
-# ==========================
-
-kmeans=KMeans(
-n_clusters=clusters,
-random_state=42,
-n_init=50
-)
-
-labels=kmeans.fit_predict(X_scaled)
-
-df=df.iloc[X.index]
-
-df['Cluster']=labels
-
-
-
-# ==========================
-# ACCURACY METRIC
-# ==========================
-
-score=silhouette_score(X_scaled,labels)
-
-st.metric("Silhouette Score",round(score,3))
-
-
-
-# ==========================
-# GRAPH 1 CLUSTERS
-# ==========================
-
-st.subheader("📈 Customer Clusters")
-
-fig,ax=plt.subplots()
-
-ax.scatter(
-X_scaled[:,0],
-X_scaled[:,1],
-c=labels,
-cmap='viridis',
-s=70
-)
-
-st.pyplot(fig)
-
-
-
-# ==========================
-# GRAPH 2 DISTRIBUTION
-# ==========================
-
-st.subheader("📊 Cluster Distribution")
-
-st.bar_chart(df['Cluster'].value_counts())
-
-
-
-# ==========================
-# GRAPH 3 ELBOW
-# ==========================
-
-st.subheader("📉 Elbow Method")
-
-wcss=[]
-
-for i in range(1,7):
-
- model=KMeans(
- n_clusters=i,
- random_state=42,
- n_init=50
- )
-
- model.fit(X_scaled)
-
- wcss.append(model.inertia_)
-
-fig2,ax2=plt.subplots()
-
-ax2.plot(range(1,7),wcss,marker='o')
-
-st.pyplot(fig2)
-
-
-
-# ==========================
-# GRAPH 4 DENDROGRAM
-# ==========================
-
-st.subheader("🌳 Dendrogram")
-
-fig3=plt.figure(figsize=(8,4))
-
-sch.dendrogram(
-sch.linkage(X_scaled,method='ward')
-)
-
-st.pyplot(fig3)
-
-
-
-# ==========================
-# GRAPH 5 SILHOUETTE
-# ==========================
-
-st.subheader("📈 Silhouette Visualization")
-
-sample_values=silhouette_samples(
-X_scaled,
-labels
-)
-
-fig4,ax4=plt.subplots()
-
-ax4.hist(sample_values,bins=20)
-
-st.pyplot(fig4)
-
-
-
-# ==========================
-# EXTRA GRAPH HEATMAP
-# ==========================
-
-st.subheader("🔥 Correlation Heatmap")
-
-corr=df[['Milk','Grocery','Detergents_Paper']].corr()
-
-fig5,ax5=plt.subplots()
-
-cax=ax5.matshow(corr)
-
-fig5.colorbar(cax)
-
-ax5.set_xticks(range(len(corr.columns)))
-ax5.set_xticklabels(corr.columns)
-
-ax5.set_yticks(range(len(corr.columns)))
-ax5.set_yticklabels(corr.columns)
-
-st.pyplot(fig5)
-
-
-
-# ==========================
-# TABLE
-# ==========================
-
-st.subheader("📋 Clustered Dataset")
-
-st.dataframe(df)
-
-
-
-# ==========================
-# DOWNLOAD
-# ==========================
-
-csv=df.to_csv(index=False).encode()
-
-st.download_button(
-"Download Data",
-csv,
-"clusters.csv"
-)
+st.write("---")
+st.subheader("Final Segmented Dataset")
+st.dataframe(df_clean.head(10).style.background_gradient(cmap='Blues', subset=['Milk', 'Grocery']))
+
+# Export
+csv = df_clean.to_csv(index=False).encode('utf-8')
+st.download_button("📥 DOWNLOAD CLEAN REPORT", csv, "clean_clusters.csv", "text/csv")
